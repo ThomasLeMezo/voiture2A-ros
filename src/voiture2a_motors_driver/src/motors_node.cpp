@@ -32,7 +32,7 @@ void MotorsNode::timer_callback() {
     auto cmd_engine = static_cast<uint8_t>(round(linear * static_cast<float>(MAX_PWM-MIN_PWM)/2.0+MOTOR_STOP));
 
     if(cmd_servo!=cmd_servo_last_ || cmd_engine!=cmd_engine_last){
-        if(motors_.write_cmd(cmd_servo, cmd_engine)==0){
+        if(motors_.write_cmd(cmd_servo, cmd_engine)==EXIT_SUCCESS){
             /// Save previous values
             cmd_servo_last_ = cmd_servo;
             cmd_engine_last = cmd_engine;
@@ -46,7 +46,7 @@ void MotorsNode::timer_callback() {
     }
 
     /// Get motor state
-    if(motors_.get_all_data()){
+    if(motors_.get_all_data()==EXIT_SUCCESS){
         voiture2a_motors_driver::msg::MotorsState msg;
         msg.pwm_value = motors_.pwm_value;
         msg.battery = motors_.battery;
@@ -78,6 +78,7 @@ void MotorsNode::init_parameters() {
 
 void MotorsNode::init_topics() {
     publisher_engine_ = this->create_publisher<voiture2a_motors_driver::msg::Engine>("engine", 1);
+    publisher_state_ = this->create_publisher<voiture2a_motors_driver::msg::MotorsState>("state", 1);
 
     subscription_velocity_ = this->create_subscription<geometry_msgs::msg::Twist>(
             "cmd_vel", 10, std::bind(&MotorsNode::topic_velocity_callback, this, _1));

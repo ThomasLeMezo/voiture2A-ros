@@ -89,8 +89,8 @@ private:
     const int nb_bits_ = 4096;
 
 public:
-    std::array<uint16_t,2> pwm_value;
-    std::array<uint16_t, 18> channels;
+    std::array<uint16_t,2> pwm_value{};
+    std::array<uint16_t, 18> channels{};
     uint8_t failsafe=255;
     uint8_t lost=255;
     float battery=-1;

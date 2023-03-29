@@ -1,6 +1,5 @@
-# GPSD package
+# gpsd_client package
 This package provide an interface to the gpsd daemon. It is used to get the GPS position and the RTK corrections if available.
-
 
 ## gpsd service parameters
 To enable the gpsd service with RTK support at ENSTA Bretagne, you need to set the following parameters in the

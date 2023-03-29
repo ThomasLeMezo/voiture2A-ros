@@ -37,14 +37,17 @@ int Motors::write_cmd(const uint8_t &servo, const uint8_t &engine) const{
 
 int Motors::get_all_data(){
     __u8 buff[REGISTER_DATA_SIZE];
-    if (i2c_smbus_read_i2c_block_data(file_, 0x00, REGISTER_DATA_SIZE, buff) != REGISTER_DATA_SIZE) {
+    int length = 0;
+    length += i2c_smbus_read_i2c_block_data(file_, 0x00, I2C_SMBUS_BLOCK_MAX, buff);
+    length += i2c_smbus_read_i2c_block_data(file_, I2C_SMBUS_BLOCK_MAX, REGISTER_DATA_SIZE-I2C_SMBUS_BLOCK_MAX, (buff+I2C_SMBUS_BLOCK_MAX));
+
+    if (length != REGISTER_DATA_SIZE) {
         RCLCPP_WARN(n_->get_logger(), "[Motors_driver] Error Reading data");
         return EXIT_FAILURE;
     }
     else{
         for(int i=0; i<2; i++)
             pwm_value[i] = buff[i*2] + (buff[i*2+1]<<8);
-
         for(int i=0; i<18; i++)
             channels[i] = buff[4+i*2] + (buff[5+i*2]<<8);
 
