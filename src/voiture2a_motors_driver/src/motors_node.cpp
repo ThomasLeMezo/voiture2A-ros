@@ -19,7 +19,7 @@ MotorsNode::MotorsNode()
 
 void MotorsNode::timer_callback() {
     float linear, angular;
-    if((this->now() - motor_time_last_) > delay_stop_){
+    if((this->now() - motor_time_last_) < delay_stop_){
         linear = reverse_servo_?-velocity_linear_:velocity_linear_;
         angular = reverse_servo_?-velocity_angular_:velocity_angular_;
     }
@@ -31,18 +31,16 @@ void MotorsNode::timer_callback() {
     auto cmd_servo = static_cast<uint8_t>(round(angular * static_cast<float>(MAX_PWM-MIN_PWM)/2.0+MOTOR_STOP));
     auto cmd_engine = static_cast<uint8_t>(round(linear * static_cast<float>(MAX_PWM-MIN_PWM)/2.0+MOTOR_STOP));
 
-    if(cmd_servo!=cmd_servo_last_ || cmd_engine!=cmd_engine_last){
-        if(motors_.write_cmd(cmd_servo, cmd_engine)==EXIT_SUCCESS){
-            /// Save previous values
-            cmd_servo_last_ = cmd_servo;
-            cmd_engine_last = cmd_engine;
+    if(motors_.write_cmd(cmd_servo, cmd_engine)==EXIT_SUCCESS){
+        /// Save previous values
+        cmd_servo_last_ = cmd_servo;
+        cmd_engine_last = cmd_engine;
 
-            /// Publish cmd for log
-            voiture2a_motors_driver::msg::Engine msg;
-            msg.servo = cmd_servo;
-            msg.engine = cmd_engine;
-            publisher_engine_->publish(msg);
-        }
+        /// Publish cmd for log
+        voiture2a_motors_driver::msg::Engine msg;
+        msg.servo = cmd_servo;
+        msg.engine = cmd_engine;
+        publisher_engine_->publish(msg);
     }
 
     /// Get motor state
@@ -85,8 +83,8 @@ void MotorsNode::init_topics() {
 }
 
 void MotorsNode::topic_velocity_callback(const geometry_msgs::msg::Twist &msg) {
-    velocity_linear_ = std::clamp(static_cast<float>(msg.linear.x), -max_linear_velocity_, max_linear_velocity_);
-    velocity_angular_ = std::clamp(static_cast<float>(msg.angular.z), -max_linear_velocity_, max_linear_velocity_);
+    velocity_linear_ = std::clamp(static_cast<float>(msg.linear.x), min_linear_velocity_, max_linear_velocity_);
+    velocity_angular_ = std::clamp(static_cast<float>(msg.angular.z), min_linear_velocity_, max_angular_velocity_);
     motor_time_last_ = this->get_clock()->now();
 }
 
