@@ -14,7 +14,7 @@ extern "C" {
 #include <i2c/smbus.h>
 }
 
-#define MOTOR_STOP 175
+#define MOTOR_STOP 127
 #define MAX_PWM 255
 #define MIN_PWM 0
 #define REGISTER_DATA_SIZE 44
@@ -79,7 +79,7 @@ private:
 
     int file_ = 0; /// File to the i2c port
     int i2c_addr_ = 0x42;
-    const int code_version_ = 0x01; /// Code version of the expected hardware
+    const int code_version_ = 0x03; /// Code version of the expected hardware
     uint8_t pic_code_version_=0; /// Code version read from the hardware
     std::string i2c_periph_ = "/dev/i2c-1";
 
