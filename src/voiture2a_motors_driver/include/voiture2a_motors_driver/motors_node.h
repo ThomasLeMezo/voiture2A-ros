@@ -26,10 +26,6 @@ private:
     const float min_linear_velocity_ = -1.0;
     const float min_angular_velocity_ = -1.0;
 
-    /// I2C send
-    uint8_t cmd_servo_last_ = MOTOR_STOP;
-    uint8_t cmd_engine_last = MOTOR_STOP;
-
     /// Rclcpp
     rclcpp::TimerBase::SharedPtr timer_;
     std::chrono::milliseconds loop_dt_ = 100ms; /// loop dt
@@ -61,16 +57,6 @@ private:
      * Init topics to this node (publishers & subscribers)
      */
     void init_topics();
-
-    /**
-     * Invert the pwm cmd wrt MOTOR_PWM_STOP
-     * @param cmd
-     * @return
-     */
-    inline uint8_t invert_cmd(const uint8_t &cmd){
-        int tmp = -(static_cast<int>(cmd) - MOTOR_STOP);
-        return static_cast<uint8_t>(MOTOR_STOP + tmp);
-    }
 };
 
 #endif //BUILD_THRUSTER_NODE_H

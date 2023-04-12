@@ -14,9 +14,6 @@ extern "C" {
 #include <i2c/smbus.h>
 }
 
-#define MOTOR_STOP 127
-#define MAX_PWM 255
-#define MIN_PWM 0
 #define REGISTER_DATA_SIZE 44
 
 class Motors
@@ -41,6 +38,20 @@ public:
 
     /**
      * @brief Send the pwm value to the thrusters \n
+     * @param linear
+     * @param angular
+     * @return
+     */
+    int write_cmd_twist(const double &linear, const double &angular);
+
+    /**
+     * @brief Get data from the dspic
+     */
+    int get_all_data();
+
+private:
+    /**
+     * @brief Send the pwm value to the thrusters \n
      * Max values \n
      *  - Stopped         127 \n
      *  - Max forward     255 \n
@@ -52,16 +63,12 @@ public:
     int write_cmd(const uint8_t &servo, const uint8_t &engine) const;
 
     /**
-     * @brief Get data from the dspic
-     */
-    int get_all_data();
-
-    /**
      * get the version of the pic software
      * @return version
      */
     uint8_t& get_version();
 
+public:
     /**
      *
      * @return
@@ -88,12 +95,23 @@ private:
     const float VCC_ = 3.3;
     const int nb_bits_ = 4096;
 
+    int motor_max_pwm_ = 255;
+    int motor_min_pwm_ = 0;
+    int motor_stop_ = static_cast<int>(round((motor_max_pwm_-motor_min_pwm_)/2.0));
+
+public:
+    int offset_servo_ = 0;
+    int offset_engine_ = 0;
+
 public:
     std::array<uint16_t,2> pwm_value{};
     std::array<uint16_t, 18> channels{};
     uint8_t failsafe=255;
     uint8_t lost=255;
     float battery=-1;
+
+    uint8_t cmd_servo_=0;
+    uint8_t cmd_engine_=0;
 
 };
 
