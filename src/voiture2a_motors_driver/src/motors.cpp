@@ -27,8 +27,8 @@ int Motors::i2c_open(){
 }
 
 int Motors::write_cmd_twist(const double &linear, const double &angular){
-    cmd_servo_ = static_cast<uint8_t>(round(angular * static_cast<float>(motor_max_pwm_-motor_min_pwm_)/2.0+(motor_stop_+offset_servo_)));
-    cmd_engine_ = static_cast<uint8_t>(round(linear * static_cast<float>(motor_max_pwm_-motor_min_pwm_)/2.0+(motor_stop_+offset_engine_)));
+    cmd_servo_ = static_cast<uint8_t>(round(angular * static_cast<float>(motor_max_pwm_-motor_min_pwm_)/2.0)+(motor_stop_+offset_servo_));
+    cmd_engine_ = static_cast<uint8_t>(round(linear * static_cast<float>(motor_max_pwm_-motor_min_pwm_)/2.0)+(motor_stop_+offset_engine_));
     return write_cmd(cmd_servo_, cmd_engine_);
 }
 
