@@ -1,0 +1,16 @@
+std_msgs/Header header
+float32 acceleration_error
+bool accelerometer_ignored
+float32 acceleration_recovery_trigger
+float32 magnetic_error
+bool magnetometer_ignored
+float32 magnetic_recovery_trigger
+bool initialising
+bool angular_rate_recovery
+bool acceleration_recovery
+bool magnetic_recovery
+
+# Magnetometer
+bool magnetometer_limit_reached
+bool magnetometer_data_skipped
+bool magnetometer_data_is_ready
