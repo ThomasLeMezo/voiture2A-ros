@@ -4,6 +4,10 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
+extern "C" {
+    #include <linux/i2c-dev.h>
+    #include <i2c/smbus.h>
+}
 #include <vector>
 #include <iostream>
 
@@ -11,8 +15,64 @@
 #include "icm20948_driver/icm20948_register.h"
 
 ICM20948::~ICM20948() {
-    if(spi_fd_ > 0)
-        close(spi_fd_);
+    if(bus_fd_ > 0)
+        close(bus_fd_);
+    if(bus_mag_fd_ > 0)
+        close(bus_mag_fd_);
+}
+
+int ICM20948::open_i2c_mag(){
+    // ************************************************
+    // Open mag device
+    if(i2c_bus_mag_ > 1){
+        cout << "I2C bus mag number must be 0 or 1" << endl;
+        return EXIT_FAILURE;
+    }
+
+    // Open I2C device
+    char I2C_DEVICE_MAG[20];    // build path to I2C device
+    sprintf(I2C_DEVICE_MAG, "/dev/i2c-%d", i2c_bus_mag_);
+    cout << "Opening I2C device: " << I2C_DEVICE_MAG << endl;
+    if ((bus_mag_fd_ = open(I2C_DEVICE_MAG, O_RDWR)) < 0) {
+        perror("Error opening I2C device mag");
+        return EXIT_FAILURE;
+    }
+
+    // Set I2C device address
+    if (ioctl(bus_mag_fd_, I2C_SLAVE, i2c_device_mag_) < 0) {
+        perror("Error setting I2C address");
+        close(bus_mag_fd_);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+int ICM20948::open_i2c(){
+    // Open ICM device
+    if(i2c_bus_ > 1){
+        cout << "I2C bus number must be 0 or 1" << endl;
+        return EXIT_FAILURE;
+    }
+
+    // Open I2C device
+    char I2C_DEVICE[20];    // build path to I2C device
+    sprintf(I2C_DEVICE, "/dev/i2c-%d", i2c_bus_);
+    cout << "Opening I2C device: " << I2C_DEVICE << endl;
+    if ((bus_fd_ = open(I2C_DEVICE, O_RDWR)) < 0) {
+        perror("Error opening I2C device");
+        return EXIT_FAILURE;
+    }
+
+    // Set I2C device address
+    if (ioctl(bus_fd_, I2C_SLAVE, i2c_device_) < 0) {
+        perror("Error setting I2C address");
+        close(bus_fd_);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+
 }
 
 int ICM20948::open_spi(const unsigned int &spi_bus, const unsigned int &spi_device){
@@ -30,22 +90,22 @@ int ICM20948::open_spi(const unsigned int &spi_bus, const unsigned int &spi_devi
     char SPI_DEVICE[20];    // build path to SPI device
     sprintf(SPI_DEVICE, "/dev/spidev%d.%d", spi_bus, spi_device);
     cout << "Opening SPI device: " << SPI_DEVICE << endl;
-    if ((spi_fd_ = open(SPI_DEVICE, O_RDWR)) < 0) {
+    if ((bus_fd_ = open(SPI_DEVICE, O_RDWR)) < 0) {
         perror("Error opening SPI device");
         return EXIT_FAILURE;
     }
 
     // Set SPI mode and speed
     uint8_t mode = SPI_MODE_3;
-    if (ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode) < 0) {
+    if (ioctl(bus_fd_, SPI_IOC_WR_MODE, &mode) < 0) {
         perror("Error setting SPI mode");
-        close(spi_fd_);
+        close(bus_fd_);
         return EXIT_FAILURE;
     }
 
-    if (ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed_) < 0) {
+    if (ioctl(bus_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed_) < 0) {
         perror("Error setting SPI speed");
-        close(spi_fd_);
+        close(bus_fd_);
         return EXIT_FAILURE;
     }
 
@@ -55,8 +115,11 @@ int ICM20948::open_spi(const unsigned int &spi_bus, const unsigned int &spi_devi
 int ICM20948::init(){
     int ret;
 
-    if(spi_fd_ == 0){
-        open_spi(spi_bus_, spi_device_);
+    if(bus_fd_ == 0){
+        if(is_i2c_bus_)
+            open_i2c();
+        else
+            open_spi(spi_bus_, spi_device_);
     }
 
     // ********************* //
@@ -98,6 +161,15 @@ int ICM20948::init(){
             break;
         }
         usleep(10000);
+    }
+
+    if(!is_i2c_bus_){
+        // Set I2C_MST_EN
+        ret = writeRegister(ICM20948_BK0_USER_CTRL, imuJoinUserCtrl(0,0,0,1,0,0,0), false);
+        if(ret != EXIT_SUCCESS){
+            cout << "Error enabling I2C master" << endl;
+            return EXIT_FAILURE;
+        }
     }
 
     // ********************* //
@@ -188,42 +260,44 @@ int ICM20948::init(){
 
     /////////////////////////////////////////////
 
-    // Configure ICM to read the magnetometer
-    select_bank(3);
+    if(!is_i2c_bus_) {
+        // Configure ICM to read the magnetometer
+        select_bank(3);
 
-    // Set I2C_SLV0 address to AK09916
-    ret = writeRegister(ICM20948_BK3_I2C_SLV0_ADDR, AK09916_ADDRESS | 0x80);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C address" << endl;
-        return EXIT_FAILURE;
-    }
+        // Set I2C_SLV0 address to AK09916
+        ret = writeRegister(ICM20948_BK3_I2C_SLV0_ADDR, AK09916_ADDRESS | 0x80);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C address" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Set I2C_SLV0 register to AK09916_ST1
-    ret = writeRegister(ICM20948_BK3_I2C_SLV0_REG, AK09916_ST1);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C register" << endl;
-        return EXIT_FAILURE;
-    }
+        // Set I2C_SLV0 register to AK09916_ST1
+        ret = writeRegister(ICM20948_BK3_I2C_SLV0_REG, AK09916_ST1);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C register" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Set I2C_MST_DELAY_CTRL (enable odr * 1/(1+I2C_SLV4_DLY))
-    ret = writeRegister(ICM20948_BK3_I2C_MST_DELAY_CTRL, imuJoinI2cMstDelayCtrl(0,0,0,0,0,i2c_slv0_delay_en_));
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C delay control" << endl;
-        return EXIT_FAILURE;
-    }
+        // Set I2C_MST_DELAY_CTRL (enable odr * 1/(1+I2C_SLV4_DLY))
+        ret = writeRegister(ICM20948_BK3_I2C_MST_DELAY_CTRL, imuJoinI2cMstDelayCtrl(0, 0, 0, 0, 0, i2c_slv0_delay_en_));
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C delay control" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Set I2C_SLV4_DLY
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(0, 0, 0, slv4_dly_));
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C delay" << endl;
-        return EXIT_FAILURE;
-    }
+        // Set I2C_SLV4_DLY
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(0, 0, 0, slv4_dly_));
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C delay" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Set I2C_SLV0 control (I2C_SLV0_EN = 1, I2C_SLV0_LENG = 9)
-    ret = writeRegister(ICM20948_BK3_I2C_SLV0_CTRL, 0x89);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C control (SLVO)" << endl;
-        return EXIT_FAILURE;
+        // Set I2C_SLV0 control (I2C_SLV0_EN = 1, I2C_SLV0_LENG = 8)
+        ret = writeRegister(ICM20948_BK3_I2C_SLV0_CTRL, 0x89);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C control (SLVO)" << endl;
+            return EXIT_FAILURE;
+        }
     }
 
     return EXIT_SUCCESS;
@@ -234,40 +308,61 @@ int ICM20948::get_measure(){
     // Select BANK0
     select_bank(0);
 
-    // Read data (14 bytes for acc & gyro & temp and 7 bytes for mag)
-    vector<uint8_t> data = readRegister(ICM20948_BK0_ACCEL_XOUT_H, 23); // 23
-    if(data.empty()){
-        cout << "Error reading measure data (size = " << data.size() << ")" << endl;
-        return EXIT_FAILURE;
+    if(is_i2c_bus_){
+        // Read data (14 bytes for acc & gyro & temp and 8 bytes for mag)
+        vector<uint8_t> data = readRegister(ICM20948_BK0_ACCEL_XOUT_H, 14);
+        if (data.empty()) {
+//            cout << "Error reading measure data (size = " << data.size() << ")" << endl;
+//            return EXIT_FAILURE;
+        }
+        acc_x_ = ((int16_t) ((data[0] << 8) | data[1])) * accel_sensitivity_[accel_fs_sel_]; // + accel_x_bias_;
+        acc_y_ = ((int16_t) ((data[2] << 8) | data[3])) * accel_sensitivity_[accel_fs_sel_]; // + accel_y_bias_;
+        acc_z_ = ((int16_t) ((data[4] << 8) | data[5])) * accel_sensitivity_[accel_fs_sel_]; // + accel_z_bias_;
+        gyro_x_ = ((int16_t) ((data[6] << 8) | data[7])) * gyro_sensitivity_[gyro_fs_sel_];
+        gyro_y_ = ((int16_t) ((data[8] << 8) | data[9])) * gyro_sensitivity_[gyro_fs_sel_];
+        gyro_z_ = ((int16_t) ((data[10] << 8) | data[11])) * gyro_sensitivity_[gyro_fs_sel_];
+        temp_ = (float) ((int16_t) ((data[12] << 8) | data[13]) / 333.87 + 21.0);
+
+        // Read magnetometer data
+        vector<uint8_t> data_mag = read_i2c_AK09916_data(AK09916_ST1, 9);
+        if (data_mag.empty()) {
+//            cout << "Error reading AK09916 data (size = " << data_mag.size() << ")" << endl;
+//            return EXIT_FAILURE;
+        }
+        else {
+            mag_x_ = ((int16_t) (data_mag[1] | (data_mag[2] << 8))) * mag_sensitivity_;
+            mag_y_ = ((int16_t) (data_mag[3] | (data_mag[4] << 8))) * mag_sensitivity_;
+            mag_z_ = ((int16_t) (data_mag[5] | (data_mag[6] << 8))) * mag_sensitivity_;
+            mag_sensor_magnetic_overflow_ = (data_mag[7] & 0x08) >> 3;
+            mag_data_is_ready_ = (data_mag[0] & 0x01);
+            mag_data_has_been_skipped_ = (data_mag[0] & 0x02) >> 1;
+        }
+
+
     }
+    else {
+        // Read data (14 bytes for acc & gyro & temp and 8 bytes for mag)
+        vector<uint8_t> data = readRegister(ICM20948_BK0_ACCEL_XOUT_H, 23);
+        if (data.empty()) {
+            cout << "Error reading measure data (size = " << data.size() << ")" << endl;
+            return EXIT_FAILURE;
+        }
 
-    acc_x_ = ((int16_t)((data[0] << 8) | data[1])) * accel_sensitivity_[accel_fs_sel_]; // + accel_x_bias_;
-    acc_y_ = ((int16_t)((data[2] << 8) | data[3])) * accel_sensitivity_[accel_fs_sel_]; // + accel_y_bias_;
-    acc_z_ = ((int16_t)((data[4] << 8) | data[5])) * accel_sensitivity_[accel_fs_sel_]; // + accel_z_bias_;
-    gyro_x_ = ((int16_t)((data[6] << 8) | data[7])) * gyro_sensitivity_[gyro_fs_sel_];
-    gyro_y_ = ((int16_t)((data[8] << 8) | data[9])) * gyro_sensitivity_[gyro_fs_sel_];
-    gyro_z_ = ((int16_t)((data[10] << 8) | data[11])) * gyro_sensitivity_[gyro_fs_sel_];
-    temp_ = (float)((int16_t)((data[12] << 8) | data[13])/333.87 + 21.0);
+        acc_x_ = ((int16_t) ((data[0] << 8) | data[1])) * accel_sensitivity_[accel_fs_sel_]; // + accel_x_bias_;
+        acc_y_ = ((int16_t) ((data[2] << 8) | data[3])) * accel_sensitivity_[accel_fs_sel_]; // + accel_y_bias_;
+        acc_z_ = ((int16_t) ((data[4] << 8) | data[5])) * accel_sensitivity_[accel_fs_sel_]; // + accel_z_bias_;
+        gyro_x_ = ((int16_t) ((data[6] << 8) | data[7])) * gyro_sensitivity_[gyro_fs_sel_];
+        gyro_y_ = ((int16_t) ((data[8] << 8) | data[9])) * gyro_sensitivity_[gyro_fs_sel_];
+        gyro_z_ = ((int16_t) ((data[10] << 8) | data[11])) * gyro_sensitivity_[gyro_fs_sel_];
+        temp_ = (float) ((int16_t) ((data[12] << 8) | data[13]) / 333.87 + 21.0);
 
-    mag_x_ = ((int16_t)(data[15] | (data[16]<< 8))) * mag_sensitivity_;
-    mag_y_ = ((int16_t)(data[17] | (data[18]<< 8))) * mag_sensitivity_;
-    mag_z_ = ((int16_t)(data[19] | (data[20]<< 8))) * mag_sensitivity_;
-    mag_sensor_magnetic_overflow_ = (data[22] & 0x08) >> 3;
-    mag_data_is_ready_ = (data[14] & 0x01);
-    mag_data_has_been_skipped_ = (data[14] & 0x02) >> 1;
-
-//    if(mag_x_ == mag_x_old_ && mag_y_ == mag_y_old_ && mag_z_ == mag_z_old_){
-//        nb_not_update++;
-//        if(nb_not_update > 10) {
-//            dump_bank(0);
-//            exit(EXIT_FAILURE);
-//        }
-//    }
-//    else{
-//        mag_x_old_ = mag_x_;
-//        mag_y_old_ = mag_y_;
-//        mag_z_old_ = mag_z_;
-//    }
+        mag_x_ = ((int16_t) (data[15] | (data[16] << 8))) * mag_sensitivity_;
+        mag_y_ = ((int16_t) (data[17] | (data[18] << 8))) * mag_sensitivity_;
+        mag_z_ = ((int16_t) (data[19] | (data[20] << 8))) * mag_sensitivity_;
+        mag_sensor_magnetic_overflow_ = (data[21] & 0x08) >> 3;
+        mag_data_is_ready_ = (data[14] & 0x01);
+        mag_data_has_been_skipped_ = (data[14] & 0x02) >> 1;
+    }
 
     return EXIT_SUCCESS;
 }
@@ -282,55 +377,66 @@ int ICM20948::reset_i2c(){
 }
 
 int ICM20948::write_i2c_AK09916_byte(const uint8_t &reg, const uint8_t &data){
-    int ret;
-    // Slect BANK3
-    ret = select_bank(3);
-
-    // Set I2C Addr (Write = 0x00)
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_ADDR, AK09916_ADDRESS | 0x00);
-    if (ret != EXIT_SUCCESS) {
-        cout << "Error writing I2C address (write_i2c_AK09916_byte)" << endl;
-        return EXIT_FAILURE;
+    if(is_i2c_bus_){
+        int ret = i2c_smbus_write_byte_data(bus_mag_fd_, reg, data);
+        if(ret<0){
+            cout << "Error writing I2C register (AK09916)" << (int)reg << endl;
+            return EXIT_FAILURE;
+        }
+        else
+            return EXIT_SUCCESS;
     }
+    else {
+        int ret;
+        // Slect BANK3
+        ret = select_bank(3);
 
-    // Set I2C REG
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_REG, reg);
-    if (ret != EXIT_SUCCESS) {
-        cout << "Error writing I2C register" << endl;
-        return EXIT_FAILURE;
+        // Set I2C Addr (Write = 0x00)
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_ADDR, AK09916_ADDRESS | 0x00);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C address (write_i2c_AK09916_byte)" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Set I2C REG
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_REG, reg);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C register" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Set I2C Data
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_DO, data);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C data" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Set I2C Control (I2C_SLV0_REG_DIS = 1)
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(1, 1, 0, slv4_dly_), false);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C control (SLV4)" << endl;
+            return EXIT_FAILURE;
+        }
+
+
+        int max_cycles = 1000;
+        int count = 0;
+        while (++count < max_cycles) {
+            select_bank(0);
+            vector<uint8_t> i2c_mst_status = readRegister(ICM20948_BK0_I2C_MST_STATUS);
+            if (i2c_mst_status[0] & (1 << 6) || count > max_cycles)
+                break;
+            usleep(1000);
+        }
+
+        if (count > max_cycles) {
+            cout << "Error write_i2c_AK09916_byte I2C_MST_STATUS" << endl;
+            return EXIT_FAILURE;
+        }
+
+        return EXIT_SUCCESS;
     }
-
-    // Set I2C Data
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_DO, data);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C data" << endl;
-        return EXIT_FAILURE;
-    }
-
-    // Set I2C Control (I2C_SLV0_REG_DIS = 1)
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(1, 1, 0, slv4_dly_), false);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C control (SLV4)" << endl;
-        return EXIT_FAILURE;
-    }
-
-
-    int max_cycles = 1000;
-    int count = 0;
-    while(++count<max_cycles){
-        select_bank(0);
-        vector<uint8_t> i2c_mst_status = readRegister(ICM20948_BK0_I2C_MST_STATUS);
-        if(i2c_mst_status[0] & (1<<6) || count > max_cycles)
-            break;
-        usleep(1000);
-    }
-
-    if(count > max_cycles){
-        cout << "Error write_i2c_AK09916_byte I2C_MST_STATUS" << endl;
-        return EXIT_FAILURE;
-    }
-
-    return EXIT_SUCCESS;
 }
 
 int ICM20948::reset_i2c_slv4(){
@@ -364,81 +470,117 @@ int ICM20948::reset_i2c_slv4(){
     return EXIT_SUCCESS;
 }
 
+std::vector<uint8_t> ICM20948::read_i2c_AK09916_data(const uint8_t &reg, const uint32_t &len) {
+    std::vector<uint8_t> dataVector;
+    dataVector.resize(len);
+    int nb_read = i2c_smbus_read_i2c_block_data(bus_mag_fd_, reg, len, dataVector.data());
+    if (nb_read != len) {
+        cout << "Error reading I2C register (AK09916, data) " << (int) reg  << " " << nb_read << " " << len << endl;
+        return {};
+    } else
+        return dataVector;
+}
+
 int ICM20948::read_i2c_AK09916_byte(const uint8_t &reg, uint8_t &data){
-    // Select BANK3
-    select_bank(3);
 
-    // Set I2C Addr (Read = 0x80)
-    int ret = writeRegister(ICM20948_BK3_I2C_SLV4_ADDR, AK09916_ADDRESS | 0x80);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C address (read_i2c_AK09916_byte)" << endl;
-        return EXIT_FAILURE;
+    if(is_i2c_bus_){
+        data = i2c_smbus_read_byte_data(bus_mag_fd_, reg);
+        if(data<0){
+            cout << "Error reading I2C register (AK09916)" << (int)reg << endl;
+            return EXIT_FAILURE;
+        }
+        else
+            return EXIT_SUCCESS;
     }
+    else {
 
-    // Set I2C REG
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_REG, reg);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C register" << endl;
-        return EXIT_FAILURE;
-    }
+        // Select BANK3
+        select_bank(3);
 
-    // Set I2C Control (I2C_SLV4_EN = 1)
-    ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(1, 1, 0, slv4_dly_), false);
-    if(ret != EXIT_SUCCESS){
-        cout << "Error writing I2C control" << endl;
-        return EXIT_FAILURE;
-    }
-    usleep(1000);
+        // Set I2C Addr (Read = 0x80)
+        int ret = writeRegister(ICM20948_BK3_I2C_SLV4_ADDR, AK09916_ADDRESS | 0x80);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C address (read_i2c_AK09916_byte)" << endl;
+            return EXIT_FAILURE;
+        }
 
-    int max_cycles = 1000;
-    int count = 0;
-    while(++count<max_cycles){
-        select_bank(0);
-        vector<uint8_t> i2c_mst_status = readRegister(ICM20948_BK0_I2C_MST_STATUS);
-        if(i2c_mst_status[0] & (1<<6) || count > max_cycles)
-            break;
+        // Set I2C REG
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_REG, reg);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C register" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Set I2C Control (I2C_SLV4_EN = 1)
+        ret = writeRegister(ICM20948_BK3_I2C_SLV4_CTRL, imuJoinI2cSlv4Ctrl(1, 1, 0, slv4_dly_), false);
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error writing I2C control" << endl;
+            return EXIT_FAILURE;
+        }
         usleep(1000);
-    }
 
-    if(count >= max_cycles){
-        cout << "Error read_i2c_AK09916_byte I2C_MST_STATUS" << endl;
-        return EXIT_FAILURE;
-    }
+        int max_cycles = 1000;
+        int count = 0;
+        while (++count < max_cycles) {
+            select_bank(0);
+            vector<uint8_t> i2c_mst_status = readRegister(ICM20948_BK0_I2C_MST_STATUS);
+            if (i2c_mst_status[0] & (1 << 6) || count > max_cycles)
+                break;
+            usleep(1000);
+        }
 
-    // Read data
-    vector<uint8_t> rx = readRegister(ICM20948_BK3_I2C_SLV4_DI, 1);
-    if(rx.empty()){
-        cout << "Error reading AK09916 data (size = " << rx.size() << ")" << endl;
-        return EXIT_FAILURE;
+        if (count >= max_cycles) {
+            cout << "Error read_i2c_AK09916_byte I2C_MST_STATUS" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Read data
+        vector<uint8_t> rx = readRegister(ICM20948_BK3_I2C_SLV4_DI, 1);
+        if (rx.empty()) {
+            cout << "Error reading AK09916 data (size = " << rx.size() << ")" << endl;
+            return EXIT_FAILURE;
+        }
+        data = rx[0];
     }
-    data = rx[0];
 
     return EXIT_SUCCESS;
 }
 
 std::vector<uint8_t> ICM20948::readRegister(const uint8_t &reg, const uint32_t &len) {
-    vector<uint8_t> rx(len + 1, 0);
-    vector<uint8_t> tx(len + 1, 0);
-
-    tx[0] = reg | 0x80;
-
-    struct spi_ioc_transfer mesg = {
-            .tx_buf = (unsigned long)tx.data(),
-            .rx_buf = (unsigned long)rx.data(),
-            .len = len + 1,
-            .speed_hz = speed_,
-            .delay_usecs = delay_usecs_,
-            .bits_per_word = 8
-    };
-
-    if (ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &mesg) < 0) {
-        perror("Error reading SPI register");
-        close(spi_fd_);
-        return {};
+    if(is_i2c_bus_) {
+        std::vector<uint8_t> dataVector;
+        dataVector.resize(len);
+        if (i2c_smbus_read_i2c_block_data(bus_fd_, reg, len, dataVector.data()) != len) {
+            cout << "Error reading I2C register (icm) " << (int) reg << endl;
+            return {};
+        } else
+            return dataVector;
     }
-    usleep(25);
+    else {
+        vector<uint8_t> rx(len + 1, 0);
+        vector<uint8_t> tx(len + 1, 0);
 
-    return {rx.begin() + 1, rx.end()};
+        tx[0] = reg | 0x80;
+
+        struct spi_ioc_transfer mesg = {
+                .tx_buf = (unsigned long) tx.data(),
+                .rx_buf = (unsigned long) rx.data(),
+                .len = len + 1,
+                .speed_hz = speed_,
+                .delay_usecs = delay_usecs_,
+                .bits_per_word = 8,
+                //.cs_change = 1
+        };
+
+        if (ioctl(bus_fd_, SPI_IOC_MESSAGE(1), &mesg) < 0) {
+            perror("Error reading SPI register");
+            close(bus_fd_);
+            return {};
+        }
+        usleep(25);
+
+        return {rx.begin() + 1, rx.end()};
+    }
 }
 
 int ICM20948::writeRegister(const uint8_t &reg, const uint8_t &data, bool check_write){
@@ -459,28 +601,39 @@ int ICM20948::writeRegister(const uint8_t &reg, const uint8_t &data, bool check_
 }
 
 int ICM20948::writeRegister(const uint8_t &reg, const std::vector<uint8_t> &data) {
-    vector<uint8_t> tx;
-    tx.reserve(data.size()+1);
-    vector<uint8_t> rx(data.size()+1, 0);
 
-    tx.push_back(reg);
-    copy(data.begin(), data.end(), back_inserter(tx));
-
-    struct spi_ioc_transfer mesg = {
-            .tx_buf = (unsigned long)tx.data(),
-            .rx_buf = (unsigned long)rx.data(),
-            .len = static_cast<__u32>(data.size()+1),
-            .speed_hz = speed_,
-            .delay_usecs = delay_usecs_,
-            .bits_per_word = 8
-    };
-
-    if (ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &mesg) < 0) {
-        perror("Error writing SPI register");
-        close(spi_fd_);
-        return EXIT_FAILURE;
+    if(is_i2c_bus_){
+        if(i2c_smbus_write_i2c_block_data(bus_fd_, reg, data.size(), data.data()) < 0){
+            cout << "Error writing I2C register " << (int)reg << endl;
+            return EXIT_FAILURE;
+        }
+        else
+            return EXIT_SUCCESS;
     }
-    usleep(25);
+    else {
+        vector<uint8_t> tx;
+        tx.reserve(data.size() + 1);
+        vector<uint8_t> rx(data.size() + 1, 0);
+
+        tx.push_back(reg);
+        copy(data.begin(), data.end(), back_inserter(tx));
+
+        struct spi_ioc_transfer mesg = {
+                .tx_buf = (unsigned long) tx.data(),
+                .rx_buf = (unsigned long) rx.data(),
+                .len = static_cast<__u32>(data.size() + 1),
+                .speed_hz = speed_,
+                .delay_usecs = delay_usecs_,
+                .bits_per_word = 8
+        };
+
+        if (ioctl(bus_fd_, SPI_IOC_MESSAGE(1), &mesg) < 0) {
+            perror("Error writing SPI register");
+            close(bus_fd_);
+            return EXIT_FAILURE;
+        }
+        usleep(25);
+    }
 
     return EXIT_SUCCESS;
 }
@@ -721,35 +874,49 @@ int ICM20948::init_magnetometer(){
     // Init magnetometer
     int ret;
 
-    // Set bypass mode off
-    select_bank(0);
-    ret = writeRegister(ICM20948_BK0_INT_PIN_CFG, imuJoinIntPinCfg(0, 0, 0, 0, 0, 0, 0));
-    if(ret != EXIT_SUCCESS){
-        cout << "Error setting I2C bypass mode" << endl;
-        return EXIT_FAILURE;
-    }
+    if(is_i2c_bus_) {
+        // Set bypass mode off
+        select_bank(0);
+        ret = writeRegister(ICM20948_BK0_INT_PIN_CFG, imuJoinIntPinCfg(0, 0, 0, 0, 0, 0, 1));
+        if(ret != EXIT_SUCCESS){
+            cout << "Error setting I2C bypass mode" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Set I2C Master clock to 400kHz
-    select_bank(3);
-    ret = writeRegister(ICM20948_BK3_I2C_MST_CTRL, imuJoinMstCtrl(0,1,i2c_frequency_clk_)); // Test restart/stop ?
-    if(ret != EXIT_SUCCESS){
-        cout << "Error setting I2C Master clock" << endl;
-        return EXIT_FAILURE;
+        open_i2c_mag();
     }
+    else{
+        // Set bypass mode off
+        select_bank(0);
+        ret = writeRegister(ICM20948_BK0_INT_PIN_CFG, imuJoinIntPinCfg(0, 0, 0, 0, 0, 0, 0));
+        if(ret != EXIT_SUCCESS){
+            cout << "Error setting I2C bypass mode" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Enable I2C
-    select_bank(0);
-    ret = writeRegister(ICM20948_BK0_USER_CTRL, imuJoinUserCtrl(0,0,1,i2c_if_dis_,0,0,0), false); // Autoreset of last 3 bits
-    if(ret != EXIT_SUCCESS){
-        cout << "Error disabling I2C" << endl;
-        return EXIT_FAILURE;
-    }
+        // Set I2C Master clock to 400kHz
+        select_bank(3);
+        ret = writeRegister(ICM20948_BK3_I2C_MST_CTRL, imuJoinMstCtrl(0, 1, i2c_frequency_clk_)); // Test restart/stop ?
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error setting I2C Master clock" << endl;
+            return EXIT_FAILURE;
+        }
 
-    // Enable I2C interrupt
-    ret = writeRegister(ICM20948_BK0_INT_ENABLE, imuJoinIntEnable(0, 0, 0, 0, 1));
-    if(ret != EXIT_SUCCESS){
-        cout << "Error enabling I2C interrupt" << endl;
-        return EXIT_FAILURE;
+        // Enable I2C
+        select_bank(0);
+        ret = writeRegister(ICM20948_BK0_USER_CTRL, imuJoinUserCtrl(0, 0, 1, i2c_if_dis_, 0, 0, 0),
+                            false); // Autoreset of last 3 bits
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error disabling I2C" << endl;
+            return EXIT_FAILURE;
+        }
+
+        // Enable I2C interrupt
+        ret = writeRegister(ICM20948_BK0_INT_ENABLE, imuJoinIntEnable(0, 0, 0, 0, 1));
+        if (ret != EXIT_SUCCESS) {
+            cout << "Error enabling I2C interrupt" << endl;
+            return EXIT_FAILURE;
+        }
     }
 
     /////////////////////////////////////////////
@@ -761,7 +928,8 @@ int ICM20948::init_magnetometer(){
     while(tries < max_tries) {
         if(test_who_i_am_mag())
             break;
-        i2c_master_reset();
+        if(!is_i2c_bus_)
+            i2c_master_reset();
         tries++;
         usleep(10000);
     }

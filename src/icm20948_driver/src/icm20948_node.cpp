@@ -1,6 +1,6 @@
 
 #include "icm20948_driver/icm20948_node.h"
-#include "icm20948_driver/FusionConverter.h"
+#include "icm20948_driver/fusion_converter.h"
 
 using namespace placeholders;
 
@@ -69,6 +69,21 @@ void ICM20948Node::init_parameters() {
     this->declare_parameter<bool>("publish_debug_fusion", publish_debug_fusion_);
     publish_debug_fusion_ = this->get_parameter_or("publish_debug_fusion", publish_debug_fusion_);
 
+    this->declare_parameter<float>("fusion_gain", fusion_gain_);
+    fusion_gain_ = this->get_parameter_or("fusion_gain", fusion_gain_);
+
+    this->declare_parameter<float>("acceleration_rejection", acceleration_rejection_);
+    acceleration_rejection_ = this->get_parameter_or("acceleration_rejection", acceleration_rejection_);
+
+    this->declare_parameter<float>("magnetic_rejection", magnetic_rejection_);
+    magnetic_rejection_ = this->get_parameter_or("magnetic_rejection", magnetic_rejection_);
+
+    this->declare_parameter<int>("recovery_trigger_period", recovery_trigger_period_);
+    recovery_trigger_period_ = this->get_parameter_or("recovery_trigger_period", recovery_trigger_period_);
+
+    this->declare_parameter<bool>("is_i2c_bus", icm20948_.is_i2c_bus_);
+    icm20948_.is_i2c_bus_ = this->get_parameter_or("is_i2c_bus", icm20948_.is_i2c_bus_);
+
     sample_rate_ = static_cast<unsigned int>(round(1000.0/(static_cast<double>(loop_dt_.count()))));
     FusionOffsetInitialise(&offset_, sample_rate_);
     FusionAhrsInitialise(&ahrs_);
@@ -87,13 +102,13 @@ void ICM20948Node::init_parameters() {
             .gyroscopeRange = static_cast<float>(icm20948_.gyro_full_scale_[icm20948_.gyro_fs_sel_]), /* replace this with actual gyroscope range in degrees/s */
             // Threshold (in degrees) used by the acceleration rejection feature. A value of zero will disable this
             // feature. A value of 10 degrees is appropriate for most applications.
-            .accelerationRejection = 10.0f,
+            .accelerationRejection = acceleration_rejection_,
             // Threshold (in degrees) used by the magnetic rejection feature. A value of zero will disable the feature.
             // A value of 10 degrees is appropriate for most applications.
-            .magneticRejection = 10.0f,
+            .magneticRejection = magnetic_rejection_,
             // Acceleration and magnetic recovery trigger period (in samples). A value of zero will disable the
             // acceleration and magnetic rejection features. A period of 5 seconds is appropriate for most applications.
-            .recoveryTriggerPeriod = 5 * sample_rate_, /* 5 seconds */
+            .recoveryTriggerPeriod = recovery_trigger_period_ * sample_rate_, /* x seconds */
     };
     FusionAhrsSetSettings(&ahrs_, &settings);
     last_time_fusion_ = steady_clock_.now();
@@ -125,10 +140,6 @@ void ICM20948Node::init_interfaces() {
 void ICM20948Node::timer_callback() {
 
     if(icm20948_.get_measure() != EXIT_SUCCESS)
-        return;
-
-    if(icm20948_.acc_x_ == 0. && icm20948_.acc_y_ == 0. && icm20948_.acc_z_ == 0.
-        && icm20948_.gyro_x_ == 0. && icm20948_.gyro_y_ == 0. && icm20948_.gyro_z_ == 0.)
         return;
 
     // Publish raw data
@@ -164,10 +175,12 @@ void ICM20948Node::compute_ahrs() {
                                  static_cast<float>(icm20948_.mag_y_),
                                  static_cast<float>(icm20948_.mag_z_)}; // replace this with actual magnetometer data in arbitrary units
 
+
     // Apply calibration
     gyroscope = FusionCalibrationInertial(gyroscope, gyroscopeMisalignment_, gyroscopeSensitivity_, gyroscopeOffset_);
     accelerometer = FusionCalibrationInertial(accelerometer, accelerometerMisalignment_, accelerometerSensitivity_, accelerometerOffset_);
     magnetometer = FusionCalibrationMagnetic(magnetometer, softIronMatrix_, hardIronOffset_);
+    magnetometer = FusionMatrixMultiplyVector(magnetometerMisalignment_, magnetometer);
 
     // Update gyroscope offset correction algorithm
     gyroscope = FusionOffsetUpdate(&offset_, gyroscope);

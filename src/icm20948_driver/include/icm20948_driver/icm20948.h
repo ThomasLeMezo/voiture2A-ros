@@ -42,9 +42,6 @@ public:
 
     double accel_x_bias_{}, accel_y_bias_{}, accel_z_bias_{};
 
-    double mag_x_old_{}, mag_y_old_{}, mag_z_old_{};
-    int nb_not_update = 0;
-
     bool mag_data_has_been_skipped_ = false;
     bool mag_data_is_ready_ = false;
     bool mag_sensor_magnetic_overflow_ = false;
@@ -52,14 +49,19 @@ public:
     uint8_t spi_bus_ = 0;
     uint8_t spi_device_ = 0;
 
-    uint8_t gyro_dlpfcfg_ = GYRO_DLPFCFG_BW23HZ;
+    uint8_t i2c_bus_ = 1;
+    uint8_t i2c_device_ = 0x69;
+    uint8_t i2c_bus_mag_ = 1;
+    uint8_t i2c_device_mag_ = 0x0C;
+
+    uint8_t gyro_dlpfcfg_ = GYRO_DLPFCFG_BW5HZ;
     uint8_t gyro_fs_sel_ = GYRO_FS_SEL_250DPS;
     uint8_t gyro_fchoice_ = 1;
-    uint8_t gyro_avgcfg_ = GYRO_AVGCFG_128X; // For low power mode only
+    uint8_t gyro_avgcfg_ = GYRO_AVGCFG_32X; // For low power mode only
     uint8_t gyro_smplrt_div_ = 21;           // => 1.1 kHz/(1+GYRO_SMPLRT_DIV[7:0]) | 21 => 50Hz (ODR) | MAX 255
 
     uint8_t accel_smplrt_div_ = 21; // 1.125 kHz/(1+ACCEL_SMPLRT_DIV[11:0]) => 1.125 kHz/(1+21) = 52.5Hz (ODR)
-    uint8_t accel_dlpfcfg_ = ACCEL_DLPFCFG_BW50HZ;
+    uint8_t accel_dlpfcfg_ = ACCEL_DLPFCFG_BW5HZ;
     uint8_t accel_fs_sel_ = ACCEL_FS_SEL_4G;
     uint8_t accel_fchoice_ = 1;
     uint8_t acc_dec3Cfg_ = ACCEL_DEC3CFG_32X; // For low power mode only
@@ -85,9 +87,12 @@ public:
     uint8_t i2c_lp_mode_ = 0x00; // 0x01
     uint8_t i2c_if_dis_ = 0x01;
 
+    bool is_i2c_bus_ = false;
+
 private:
-    int spi_fd_ = 0;
-    uint32_t speed_ = 6000000;
+    int bus_fd_ = 0;
+    int bus_mag_fd_ = 0;
+    uint32_t speed_ = 3000000; //3000000;
     int current_bank_ = -1;
 
     uint8_t cs_change_ = 0;
@@ -450,6 +455,10 @@ private:
     int read_i2c_AK09916_byte(const uint8_t &reg, uint8_t &data);
 
 
+    int open_i2c();
+    int open_i2c_mag();
+
+    vector<uint8_t> read_i2c_AK09916_data(const uint8_t &reg, const uint32_t &len);
 };
 
 #endif //BUILD_ICM20948_H

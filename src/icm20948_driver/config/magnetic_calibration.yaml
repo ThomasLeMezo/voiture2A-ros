@@ -1,0 +1,4 @@
+magnetic_calibration:
+  ros__parameters:
+    bag_path: ""
+    topic_raw_imu_name: "/driver/raw_data"
